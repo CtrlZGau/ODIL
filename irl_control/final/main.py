@@ -1,3 +1,5 @@
+# This is the main loop for the One short Dual Arm Imitation Learning paper
+
 import time as time_lib
 from typing import Dict
 
