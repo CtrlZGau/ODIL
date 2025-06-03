@@ -1,0 +1,10 @@
+OK Initial Position set - right_wp = np.array([0.5, 0.45, 0.5])
+        left_wp = np.array([-0.3, 0.45, 0.5])
+
+        set_abg(np.array([0, -np.pi / 2, 0]))
+        set_abg(np.array([0, -np.pi / 2, 0]))
+
+        Box Position - 0 0.3 0.02
+
+        Bottle Neck Position - (0, 0.3, 0.1)
+
