@@ -40,6 +40,9 @@ def mujoco_depth_to_real(depth, near=0.02, far=10.0):
     return  near * far / (far - (far - near) * depth)
 
 def segment(image):
+    """
+    Make it Grounding DINO for segmentation of any object
+    """
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
     # Define broad range for blue (light to dark, cyan to navy)
@@ -60,6 +63,9 @@ def segment(image):
 
 
 def find_center(segmented_mask):
+    """
+    Replace this function with PPCR for better prediction of the pose of the object.
+    """
     moments = cv2.moments(segmented_mask)
     if moments["m00"] == 0:
         print("Mask has zero area")
@@ -185,7 +191,9 @@ class MoveTest(MujocoGymAppHighFidelity):
         return None
 
     def run(self):
-
+        """
+        Main loop for the robot control
+        """
         # Camera Properties
         zfar = 5.0
         znear = 0.01
@@ -200,7 +208,7 @@ class MoveTest(MujocoGymAppHighFidelity):
         # Covert to actual depth
         real_depth = mujoco_depth_to_real(depth)
 
-        # Stage 1: Global Camera 
+        ############## STAGE 1: Global Camera ##################
         # Get the segment from the global camera
         demontration_mask = cv2.imread("assets/segmented_box.png", cv2.IMREAD_GRAYSCALE)
         demo_distance = 0.614
@@ -237,6 +245,8 @@ class MoveTest(MujocoGymAppHighFidelity):
         demo_world_point[2] += 0.04 
         print(f"Demo World coordinates: {demo_world_point}")
         print(f"Test World coordinates: {test_world_point}")
+
+        # Finding all the transformation matrices for the estimate
 
         bottle_neck_pos = np.array([[0, 0.3, 0.25]])
 
@@ -275,6 +285,7 @@ class MoveTest(MujocoGymAppHighFidelity):
         left_wp = np.array([-0.3, 0.45, 0.5])
 
         start_time = time_lib.time()
+        ################## END OF STAGE 1 ##################
 
         # Main loop to control the robot
         while time_lib.time() - start_time < 20:
