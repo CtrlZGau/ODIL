@@ -126,7 +126,39 @@ def simple_pixel_to_world(u, v, depth_meters, camera_pos, camera_euler, fovy=60,
     # Step 6: Transform to world coordinates
     world_coords = R @ camera_coords + np.array(camera_pos)
     
-    return world_coords
+    return camera_coords, world_coords
+
+def create_transform_matrix(position, euler_angles):
+    """
+    Create a transformation matrix from position and Euler angles.
+    :param position: 3D position as a numpy array [x, y, z]
+    :param euler_angles: Euler angles as a numpy array [roll, pitch, yaw]
+    :return: 4x4 transformation matrix
+    """
+    roll, pitch, yaw = euler_angles
+
+    # Create rotation matrices for each axis
+    Rx = np.array([[1, 0, 0],
+                   [0, np.cos(roll), -np.sin(roll)],
+                   [0, np.sin(roll), np.cos(roll)]])
+
+    Ry = np.array([[np.cos(pitch), 0, np.sin(pitch)],
+                   [0, 1, 0],
+                   [-np.sin(pitch), 0, np.cos(pitch)]])
+
+    Rz = np.array([[np.cos(yaw), -np.sin(yaw), 0],
+                   [np.sin(yaw), np.cos(yaw), 0],
+                   [0, 0, 1]])
+
+    # Combined rotation matrix
+    R = Rz @ Ry @ Rx
+
+    # Create the transformation matrix
+    transform_matrix = np.eye(4)
+    transform_matrix[:3, :3] = R
+    transform_matrix[:3, 3] = position
+
+    return transform_matrix
 
     
 class MoveTest(MujocoGymAppHighFidelity):
@@ -153,6 +185,14 @@ class MoveTest(MujocoGymAppHighFidelity):
         return None
 
     def run(self):
+
+        # Camera Properties
+        zfar = 5.0
+        znear = 0.01
+        fx, fy, cx, cy = get_camera_intrinsics_from_fovy(self, 480, 360)
+        print(f"Model extent: {self.model.stat.extent}")
+        print(f"Actual near: {znear * self.model.stat.extent}")
+        print(f"Actual far: {zfar * self.model.stat.extent}")
         
         depth = self.mujoco_renderer.render("depth_array",camera_name="global_cam" )
         pixels = self.mujoco_renderer.render("rgb_array",camera_name="global_cam" )
@@ -181,20 +221,48 @@ class MoveTest(MujocoGymAppHighFidelity):
         global_camera_euler = [-1.2, 0, 3.1415926536]
         img_width, img_height = 480, 360
 
-        demo_world_point = simple_pixel_to_world(
+        demo_camera_coords, demo_world_point = simple_pixel_to_world(
             demo_cX, demo_cY, demo_distance, 
             global_camera_pos, global_camera_euler, 60, 
             img_width, img_height
         )
 
-        test_world_point = simple_pixel_to_world(
+        test_camera_coords, test_world_point = simple_pixel_to_world(
             test_cX, test_cY, center_depth, 
             global_camera_pos, global_camera_euler, 60, 
             img_width, img_height
         )
 
+        test_world_point[2] += 0.04
+        demo_world_point[2] += 0.04 
         print(f"Demo World coordinates: {demo_world_point}")
         print(f"Test World coordinates: {test_world_point}")
+
+        bottle_neck_pos = np.array([[0, 0.3, 0.25]])
+
+        T_bottle_neck = create_transform_matrix(
+            position=bottle_neck_pos[0],
+            euler_angles=np.array([0, -np.pi / 2, 0])
+        )
+            
+        T_demo_object = create_transform_matrix(
+            position=demo_camera_coords,
+            euler_angles=np.array([0, 0, 0])  # Assuming no rotation for the demo object
+        )
+        T_test_object = create_transform_matrix(
+            position=test_camera_coords,
+            euler_angles=np.array([0, 0, 0])  # Assuming no rotation for the test object
+        )
+        T_delta_global_camera = T_test_object @ np.linalg.inv(T_demo_object)
+        print(f"Transformation from demo to test object:\n{T_delta_global_camera}")
+
+        T_global_camera_robot_frame = create_transform_matrix(
+            position=global_camera_pos,
+            euler_angles=global_camera_euler
+        )
+
+        estimate = (((T_global_camera_robot_frame @ T_delta_global_camera) @ np.linalg.inv(T_global_camera_robot_frame)) @ T_bottle_neck)[:3, 3]
+        print(f"Estimated bottle neck position in robot frame: {estimate}")
 
         # Define targets for both arms
         targets: Dict[str, Target] = {
@@ -203,22 +271,13 @@ class MoveTest(MujocoGymAppHighFidelity):
             "ur5left": Target(),
         }
 
-        right_wp = np.array([0.3, 0.45, 0.5])
+        right_wp = np.array([estimate[0], estimate[1], estimate[2]])
         left_wp = np.array([-0.3, 0.45, 0.5])
-
-        # Camera Properties
-        zfar = 5.0
-        znear = 0.01
-        fx, fy, cx, cy = get_camera_intrinsics_from_fovy(self, 480, 360)
-        print(f"Model extent: {self.model.stat.extent}")
-        print(f"Actual near: {znear * self.model.stat.extent}")
-        print(f"Actual far: {zfar * self.model.stat.extent}")
-
 
         start_time = time_lib.time()
 
         # Main loop to control the robot
-        while time_lib.time() - start_time < 5:
+        while time_lib.time() - start_time < 20:
 
             # Set the target position and orientation of both arms
             targets["ur5right"].set_xyz(right_wp)
