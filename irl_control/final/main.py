@@ -10,7 +10,12 @@ from irl_control.mujoco_gym_app import MujocoGymAppHighFidelity
 from irl_control.utils.target import Target
 import cv2
 import numpy as np
+import torch
 import math
+
+from lightglue import LightGlue, SuperPoint, DISK, SIFT, ALIKED, DoGHardNet
+from lightglue.utils import load_image, rbd
+from lightglue import match_pair
 
 def get_camera_intrinsics_from_fovy(sim, img_width, img_height):
     cam_id = 1
@@ -166,6 +171,83 @@ def create_transform_matrix(position, euler_angles):
 
     return transform_matrix
 
+def feature_matching_algo(img0_np, img1_np):
+
+    image0 = numpy_to_torch(img0_np).cuda()   # now shape = (3, H, W), float32, on GPU
+    image1 = numpy_to_torch(img1_np).cuda()
+
+    # ---- Initialize extractor and matcher ----
+    extractor = SIFT(max_num_keypoints=2048).eval().cuda()
+    matcher = LightGlue(features='disk').eval().cuda()
+
+    # —– Get keypoint features and matches
+    feats0, feats1, matches01 = match_pair(extractor, matcher, image0, image1)
+    matches0 = matches01["matches0"].cpu().numpy()      # shape = (N0,)
+    kpts0_all = feats0["keypoints"].cpu().numpy()      # shape = (N0, 2)
+    kpts1_all = feats1["keypoints"].cpu().numpy()      # shape = (N1, 2)
+
+    # —– Gather only the valid correspondences
+    valid_mask = matches0 > -1
+    pts0 = kpts0_all[valid_mask]                       # shape = (M, 2)
+    pts1 = kpts1_all[matches0[valid_mask]]              # shape = (M, 2)
+
+    print(f"Found {pts0.shape[0]} total matches.")
+
+    # —– Check if there are ≥ 4 matches for a homography
+    if pts0.shape[0] < 4:
+        print("Not enough matches to compute a homography.")
+        # You know “image0 is probably not in image1” or just skip H.
+    else:
+        # Convert to float32 (required by OpenCV)
+        pts0_f = pts0.astype(np.float32)
+        pts1_f = pts1.astype(np.float32)
+
+        # Run RANSAC + Homography
+        H, inlier_mask = cv2.findHomography(
+            pts0_f, pts1_f,
+            method=cv2.RANSAC,
+            ransacReprojThreshold=3.0,
+            maxIters=2000,
+            confidence=0.995
+        )
+
+        if H is None:
+            print("findHomography returned None → insufficient inliers.")
+        else:
+            num_inliers = int(inlier_mask.sum())
+            print(f"Homography computed with {num_inliers}/{pts0.shape[0]} inliers.")
+            # H is your 3×3 projective transform, mapping image0 → image1.
+
+            # (Optional) Extract a pure rotation+translation via affine on the inliers:
+            inlier_pts0 = pts0[inlier_mask.ravel().astype(bool)]
+            inlier_pts1 = pts1[inlier_mask.ravel().astype(bool)]
+            A, aff_mask = cv2.estimateAffinePartial2D(
+                inlier_pts0.astype(np.float32),
+                inlier_pts1.astype(np.float32),
+                method=cv2.RANSAC,
+                ransacReprojThreshold=3.0
+            )
+            if A is not None:
+                r11, r12, tx = A[0]
+                r21, r22, ty = A[1]
+                theta = np.degrees(np.arctan2(r21, r11))
+                print(f"2D‐Affine: rotation {theta:.2f}°, translation (tx={tx:.1f}, ty={ty:.1f})")
+            else:
+                print("Could not compute 2D‐affine from inliers.")
+
+
+# 2. Convert BGR → RGB, then to float in [0,1], then to torch.Tensor, channel-first:
+def numpy_to_torch(img_bgr: np.ndarray) -> torch.Tensor:
+    # a) BGR → RGB
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)      # still shape (H, W, 3)
+    # b) uint8 [0..255] → float32 [0..1]
+    img_f = img_rgb.astype(np.float32) / 255.0               # shape (H, W, 3)
+    # c) H×W×3 → 3×H×W
+    img_chw = np.transpose(img_f, (2, 0, 1))                 # shape (3, H, W)
+    # d) to torch.Tensor
+    tensor = torch.from_numpy(img_chw)                       # torch.float32 by default
+    return tensor
+
     
 class MoveTest(MujocoGymAppHighFidelity):
     """
@@ -210,7 +292,7 @@ class MoveTest(MujocoGymAppHighFidelity):
 
         ############## STAGE 1: Global Camera ##################
         # Get the segment from the global camera
-        demontration_mask = cv2.imread("assets/segmented_box.png", cv2.IMREAD_GRAYSCALE)
+        #demontration_mask = cv2.imread("assets/segmented_box.png", cv2.IMREAD_GRAYSCALE)
         demo_distance = 0.614
         demo_cX, demo_cY = 239, 309
 
@@ -288,7 +370,7 @@ class MoveTest(MujocoGymAppHighFidelity):
         ################## END OF STAGE 1 ##################
 
         # Main loop to control the robot
-        while time_lib.time() - start_time < 20:
+        while time_lib.time() - start_time < 10:
 
             # Set the target position and orientation of both arms
             targets["ur5right"].set_xyz(right_wp)
@@ -311,33 +393,57 @@ class MoveTest(MujocoGymAppHighFidelity):
             cv2.imshow("Left Wrist Camera", pixels)
             depthr = self.mujoco_renderer.render("depth_array",camera_name="wrist_cam_right" )
             pixelsr = self.mujoco_renderer.render("rgb_array",camera_name="wrist_cam_right")
-            cv2.imshow("Right Wrist Camera", pixels)
+            cv2.imshow("Right Wrist Camera", pixelsr)
             depth = self.mujoco_renderer.render("depth_array",camera_name="global_cam" )
             pixels = self.mujoco_renderer.render("rgb_array",camera_name="global_cam" )
             cv2.imshow("Global Camera", pixels)
             cv2.waitKey(1)
 
-        # Stage 2: Wrist Camera
+        #################Stage 2: Wrist Camera#################################3
         # Get the segment from the wrist camera
 
-        wrist_bottkleneck = cv2.imread("assets/expert_wrist.png", cv2.IMREAD_GRAYSCALE)
+        current_robot_pose = right_wp
+        current_robot_orie = np.array([0, -np.pi / 2, 0])
+
+        wrist_bottkleneck = cv2.imread("assets/expert_wrist_cam.jpeg")
         # open the numpy file 
-        depthr_data = np.load("assets/my_depthr.npy")
+        depthr_data = np.load("assets/depth_right.npy")
+        demo_depthr_data = mujoco_depth_to_real(depthr_data)
 
-
-        #demo_wrist_mask = segment(wrist_bottkleneck)
+        demo_wrist_mask = segment(wrist_bottkleneck)
         test_wrist_mask = segment(pixelsr)
-        #demo_wrist_cX, demo_wrist_cY = find_center(demo_wrist_mask)
+
+        demo_wrist_cX, demo_wrist_cY = find_center(demo_wrist_mask)
         test_wrist_cX, test_wrist_cY = find_center(test_wrist_mask)
 
         # Calculate the distance from the camera to the wrist point
-        #demo_wrist_distance = depthr_data[demo_wrist_cY, demo_wrist_cX]
+        demo_wrist_distance = demo_depthr_data[demo_wrist_cY, demo_wrist_cX]
         real_depthr = mujoco_depth_to_real(depthr_data)
         test_wrist_distance = real_depthr[test_wrist_cY, test_wrist_cX]
 
-        #print(f"Demo Wrist Depth: {demo_wrist_distance:.3f} meters")
+        print(f"Demo Wrist Depth: {demo_wrist_distance:.3f} meters")
         print(f"Test Wrist Depth: {test_wrist_distance:.3f} meters")
-        # Calculate the wrist point in the camera frame
+
+        # Do Light Glue
+        feature_matching_algo(pixelsr, pixelsr)
+
+        # Tranformation Matrixes for estimate
+
+        T_EE_robot_frame = create_transform_matrix(
+            position=current_robot_pose,
+            euler_angles=current_robot_orie
+        )
+
+        wrist_cam_pose_EE = np.array([-0.05, 0, 0.05])
+        wrist_cam_orie_EE = np.array([0, 1.56, 1.57079632679])
+
+        T_wrist_cam_EE = create_transform_matrix(
+            position=wrist_cam_pose_EE,
+            euler_angles=wrist_cam_orie_EE
+        )
+
+
+        
 
         
 

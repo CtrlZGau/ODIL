@@ -190,12 +190,12 @@ class MoveTest(MujocoGymAppHighFidelity):
         # depth = mujoco_depth_to_real(depth)
         # depth_right = mujoco_depth_to_real(depth_right)
 
-        cv2.imwrite("assets/expert_global_cam.png", pixels1)
-        cv2.imwrite("assets/expert_wrist.png", pixels)
+        cv2.imwrite("assets/expert_global_cam.jpeg", pixels1)
+        cv2.imwrite("assets/expert_wrist_cam.jpeg", pixels)
 
         #o3d.visualization.draw_geometries([depth])
-        saved_img = save_depth_array(depth, 'assets/my_depth')
-        saved_img_right = save_depth_array(depth_right, 'assets/my_depthr')
+        saved_img = save_depth_array(depth, 'assets/depth_global')
+        saved_img_right = save_depth_array(depth_right, 'assets/depth_right')
         # save_depth_16bit(depth, "depth_16bit.png")
         # save_depth_16bit(depth_right, "depthr_16bit.png")
 
