@@ -309,7 +309,8 @@ class MoveTest(MujocoGymAppHighFidelity):
             # Render the cameras
             pixels = self.mujoco_renderer.render("rgb_array",camera_name="wrist_cam_left")
             cv2.imshow("Left Wrist Camera", pixels)
-            pixels = self.mujoco_renderer.render("rgb_array",camera_name="wrist_cam_right")
+            depthr = self.mujoco_renderer.render("depth_array",camera_name="wrist_cam_right" )
+            pixelsr = self.mujoco_renderer.render("rgb_array",camera_name="wrist_cam_right")
             cv2.imshow("Right Wrist Camera", pixels)
             depth = self.mujoco_renderer.render("depth_array",camera_name="global_cam" )
             pixels = self.mujoco_renderer.render("rgb_array",camera_name="global_cam" )
@@ -318,6 +319,27 @@ class MoveTest(MujocoGymAppHighFidelity):
 
         # Stage 2: Wrist Camera
         # Get the segment from the wrist camera
+
+        wrist_bottkleneck = cv2.imread("assets/expert_wrist.png", cv2.IMREAD_GRAYSCALE)
+        # open the numpy file 
+        depthr_data = np.load("assets/my_depthr.npy")
+
+
+        #demo_wrist_mask = segment(wrist_bottkleneck)
+        test_wrist_mask = segment(pixelsr)
+        #demo_wrist_cX, demo_wrist_cY = find_center(demo_wrist_mask)
+        test_wrist_cX, test_wrist_cY = find_center(test_wrist_mask)
+
+        # Calculate the distance from the camera to the wrist point
+        #demo_wrist_distance = depthr_data[demo_wrist_cY, demo_wrist_cX]
+        real_depthr = mujoco_depth_to_real(depthr_data)
+        test_wrist_distance = real_depthr[test_wrist_cY, test_wrist_cX]
+
+        #print(f"Demo Wrist Depth: {demo_wrist_distance:.3f} meters")
+        print(f"Test Wrist Depth: {test_wrist_distance:.3f} meters")
+        # Calculate the wrist point in the camera frame
+
+        
 
 
 

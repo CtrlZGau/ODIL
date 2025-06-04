@@ -173,7 +173,7 @@ class MoveTest(MujocoGymAppHighFidelity):
             depth_right = self.mujoco_renderer.render("depth_array",camera_name="wrist_cam_right" )
             cv2.imshow("Right Wrist Camera", pixels)
             depth = self.mujoco_renderer.render("depth_array",camera_name="global_cam" )
-            pixels = self.mujoco_renderer.render("rgb_array",camera_name="global_cam" )
+            pixels1 = self.mujoco_renderer.render("rgb_array",camera_name="global_cam" )
             depth = mujoco_depth_to_real(depth)
             distance = get_distance_from_depth(depth, x, y)
             print(f"Distance at pixel ({x}, {y}): {distance:.2f} meters")
@@ -190,9 +190,12 @@ class MoveTest(MujocoGymAppHighFidelity):
         # depth = mujoco_depth_to_real(depth)
         # depth_right = mujoco_depth_to_real(depth_right)
 
+        cv2.imwrite("assets/expert_global_cam.png", pixels1)
+        cv2.imwrite("assets/expert_wrist.png", pixels)
+
         #o3d.visualization.draw_geometries([depth])
-        saved_img = save_depth_as_24bit_fixed(depth, 'my_depth_24bit.png')
-        saved_img_right = save_depth_as_24bit_fixed(depth_right, 'my_depthr_24bit.png')
+        saved_img = save_depth_array(depth, 'assets/my_depth')
+        saved_img_right = save_depth_array(depth_right, 'assets/my_depthr')
         # save_depth_16bit(depth, "depth_16bit.png")
         # save_depth_16bit(depth_right, "depthr_16bit.png")
 
