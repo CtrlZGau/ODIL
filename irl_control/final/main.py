@@ -364,6 +364,9 @@ class MoveTest(MujocoGymAppHighFidelity):
         demo_wrist_mask, demo_blue_shaded_segment = segment(wrist_bottkleneck)
         test_wrist_mask, test_blue_shaded_segment = segment(pixelsr)
 
+        cv2.imshow("Global Camera", test_wrist_mask)
+        cv2.waitKey(1)
+
         demo_wrist_cX, demo_wrist_cY = find_center(demo_wrist_mask)
         test_wrist_cX, test_wrist_cY = find_center(test_wrist_mask)
 
@@ -427,8 +430,12 @@ class MoveTest(MujocoGymAppHighFidelity):
             euler_angles=np.array([0, 0, 0])
         )
 
-        estimate = (T_EE_robot_frame @ ((T_EE_wrist_cam @ T_delta_wrist_cam) @ np.linalg.inv(T_EE_wrist_cam)))[:3, 3]
+        estimate_wrist = (T_EE_robot_frame @ ((T_EE_wrist_cam @ T_delta_wrist_cam) @ np.linalg.inv(T_EE_wrist_cam)))[:3, 3]
         print("Estimate:", estimate)
+
+        print("Avg Estimate: ",(estimate + estimate_wrist)/2)
+
+        
         
 
         
