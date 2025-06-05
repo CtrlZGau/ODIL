@@ -12,10 +12,7 @@ import cv2
 import numpy as np
 import torch
 import math
-
-from lightglue import LightGlue, SuperPoint, DISK, SIFT, ALIKED, DoGHardNet
-from lightglue.utils import load_image, rbd
-from lightglue import match_pair
+import open3d as o3d
 
 def get_camera_intrinsics_from_fovy(sim, img_width, img_height):
     cam_id = 1
@@ -64,7 +61,7 @@ def segment(image):
 
     # Apply mask to original image
     segmented_blue = cv2.bitwise_and(image, image, mask=blue_mask)
-    return blue_mask
+    return blue_mask, segmented_blue
 
 
 def find_center(segmented_mask):
@@ -171,69 +168,23 @@ def create_transform_matrix(position, euler_angles):
 
     return transform_matrix
 
-def feature_matching_algo(img0_np, img1_np):
+def mask_to_pointcloud(mask, depth, K):
+    """
+    Converts a segmentation mask and corresponding depth map into a 3D point cloud.
+    """
+    fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
+    points = []
 
-    image0 = numpy_to_torch(img0_np).cuda()   # now shape = (3, H, W), float32, on GPU
-    image1 = numpy_to_torch(img1_np).cuda()
+    indices = np.argwhere(mask > 0)
+    for v, u in indices:
+        z = depth[v, u] / 1000.0  # mm → meters if needed
+        if z == 0:
+            continue
+        x = (u - cx) * z / fx
+        y = (v - cy) * z / fy
+        points.append([x, y, z])
 
-    # ---- Initialize extractor and matcher ----
-    extractor = SIFT(max_num_keypoints=2048).eval().cuda()
-    matcher = LightGlue(features='disk').eval().cuda()
-
-    # —– Get keypoint features and matches
-    feats0, feats1, matches01 = match_pair(extractor, matcher, image0, image1)
-    matches0 = matches01["matches0"].cpu().numpy()      # shape = (N0,)
-    kpts0_all = feats0["keypoints"].cpu().numpy()      # shape = (N0, 2)
-    kpts1_all = feats1["keypoints"].cpu().numpy()      # shape = (N1, 2)
-
-    # —– Gather only the valid correspondences
-    valid_mask = matches0 > -1
-    pts0 = kpts0_all[valid_mask]                       # shape = (M, 2)
-    pts1 = kpts1_all[matches0[valid_mask]]              # shape = (M, 2)
-
-    print(f"Found {pts0.shape[0]} total matches.")
-
-    # —– Check if there are ≥ 4 matches for a homography
-    if pts0.shape[0] < 4:
-        print("Not enough matches to compute a homography.")
-        # You know “image0 is probably not in image1” or just skip H.
-    else:
-        # Convert to float32 (required by OpenCV)
-        pts0_f = pts0.astype(np.float32)
-        pts1_f = pts1.astype(np.float32)
-
-        # Run RANSAC + Homography
-        H, inlier_mask = cv2.findHomography(
-            pts0_f, pts1_f,
-            method=cv2.RANSAC,
-            ransacReprojThreshold=3.0,
-            maxIters=2000,
-            confidence=0.995
-        )
-
-        if H is None:
-            print("findHomography returned None → insufficient inliers.")
-        else:
-            num_inliers = int(inlier_mask.sum())
-            print(f"Homography computed with {num_inliers}/{pts0.shape[0]} inliers.")
-            # H is your 3×3 projective transform, mapping image0 → image1.
-
-            # (Optional) Extract a pure rotation+translation via affine on the inliers:
-            inlier_pts0 = pts0[inlier_mask.ravel().astype(bool)]
-            inlier_pts1 = pts1[inlier_mask.ravel().astype(bool)]
-            A, aff_mask = cv2.estimateAffinePartial2D(
-                inlier_pts0.astype(np.float32),
-                inlier_pts1.astype(np.float32),
-                method=cv2.RANSAC,
-                ransacReprojThreshold=3.0
-            )
-            if A is not None:
-                r11, r12, tx = A[0]
-                r21, r22, ty = A[1]
-                theta = np.degrees(np.arctan2(r21, r11))
-                print(f"2D‐Affine: rotation {theta:.2f}°, translation (tx={tx:.1f}, ty={ty:.1f})")
-            else:
-                print("Could not compute 2D‐affine from inliers.")
+    return np.array(points)
 
 
 # 2. Convert BGR → RGB, then to float in [0,1], then to torch.Tensor, channel-first:
@@ -296,7 +247,7 @@ class MoveTest(MujocoGymAppHighFidelity):
         demo_distance = 0.614
         demo_cX, demo_cY = 239, 309
 
-        test_mask = segment(pixels)
+        test_mask, _ = segment(pixels)
 
         # Now from the segment find the mid Point of the segment
         test_cX, test_cY = find_center(test_mask)
@@ -330,7 +281,7 @@ class MoveTest(MujocoGymAppHighFidelity):
 
         # Finding all the transformation matrices for the estimate
 
-        bottle_neck_pos = np.array([[0, 0.3, 0.25]])
+        bottle_neck_pos = np.array([[0.025, 0.3, 0.25]])
 
         T_bottle_neck = create_transform_matrix(
             position=bottle_neck_pos[0],
@@ -410,8 +361,8 @@ class MoveTest(MujocoGymAppHighFidelity):
         depthr_data = np.load("assets/depth_right.npy")
         demo_depthr_data = mujoco_depth_to_real(depthr_data)
 
-        demo_wrist_mask = segment(wrist_bottkleneck)
-        test_wrist_mask = segment(pixelsr)
+        demo_wrist_mask, demo_blue_shaded_segment = segment(wrist_bottkleneck)
+        test_wrist_mask, test_blue_shaded_segment = segment(pixelsr)
 
         demo_wrist_cX, demo_wrist_cY = find_center(demo_wrist_mask)
         test_wrist_cX, test_wrist_cY = find_center(test_wrist_mask)
@@ -424,8 +375,37 @@ class MoveTest(MujocoGymAppHighFidelity):
         print(f"Demo Wrist Depth: {demo_wrist_distance:.3f} meters")
         print(f"Test Wrist Depth: {test_wrist_distance:.3f} meters")
 
+        K = np.array([[fx, 0, cx],
+              [0, fy, cy],
+              [0,  0,  1]])
+
         # Do Light Glue
-        feature_matching_algo(pixelsr, pixelsr)
+        pcd1_np = mask_to_pointcloud(demo_wrist_mask, demo_depthr_data, K)
+        pcd2_np = mask_to_pointcloud(test_wrist_mask, real_depthr, K)
+
+        pcd1 = o3d.geometry.PointCloud()
+        pcd2 = o3d.geometry.PointCloud()
+        pcd1.points = o3d.utility.Vector3dVector(pcd1_np)
+        pcd2.points = o3d.utility.Vector3dVector(pcd2_np)
+
+        # Apply ICP to align pcd2 to pcd1
+        threshold = 0.05  # max correspondence distance
+        reg = o3d.pipelines.registration.registration_icp(
+            pcd2, pcd1, threshold,
+            np.eye(4),
+            o3d.pipelines.registration.TransformationEstimationPointToPoint()
+        )
+
+        # Get relative transformation matrix
+        T = reg.transformation  # 4x4 matrix
+
+        # Decompose it into R and t
+        R = T[:3, :3]
+        t = T[:3, 3]
+
+        print("Rotation:\n", R)
+        print("Translation:\n", t)
+
 
         # Tranformation Matrixes for estimate
 
@@ -437,12 +417,18 @@ class MoveTest(MujocoGymAppHighFidelity):
         wrist_cam_pose_EE = np.array([-0.05, 0, 0.05])
         wrist_cam_orie_EE = np.array([0, 1.56, 1.57079632679])
 
-        T_wrist_cam_EE = create_transform_matrix(
+        T_EE_wrist_cam = create_transform_matrix(
             position=wrist_cam_pose_EE,
             euler_angles=wrist_cam_orie_EE
         )
 
+        T_delta_wrist_cam = create_transform_matrix(
+            position=t,
+            euler_angles=np.array([0, 0, 0])
+        )
 
+        estimate = (T_EE_robot_frame @ ((T_EE_wrist_cam @ T_delta_wrist_cam) @ np.linalg.inv(T_EE_wrist_cam)))[:3, 3]
+        print("Estimate:", estimate)
         
 
         

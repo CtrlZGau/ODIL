@@ -144,7 +144,7 @@ class MoveTest(MujocoGymAppHighFidelity):
             "ur5left": Target(),
         }
 
-        right_wp = np.array([0, 0.3, 0.25])
+        right_wp = np.array([0.025, 0.3, 0.25])
         left_wp = np.array([-0.3, 0.45, 0.5])
         x, y = 239, 309
         start_time = time_lib.time()
