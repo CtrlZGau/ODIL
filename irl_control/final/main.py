@@ -177,11 +177,11 @@ def mask_to_pointcloud(mask, depth, K):
 
     indices = np.argwhere(mask > 0)
     for v, u in indices:
-        z = depth[v, u] / 1000.0  # mm → meters if needed
+        z = depth[v, u] / 1000
         if z == 0:
             continue
-        x = (u - cx) * z / fx
-        y = (v - cy) * z / fy
+        x = (u - cx) * z / fx 
+        y = (v - cy) * z / fy 
         points.append([x, y, z])
 
     return np.array(points)
@@ -364,9 +364,6 @@ class MoveTest(MujocoGymAppHighFidelity):
         demo_wrist_mask, demo_blue_shaded_segment = segment(wrist_bottkleneck)
         test_wrist_mask, test_blue_shaded_segment = segment(pixelsr)
 
-        cv2.imshow("Global Camera", test_wrist_mask)
-        cv2.waitKey(1)
-
         demo_wrist_cX, demo_wrist_cY = find_center(demo_wrist_mask)
         test_wrist_cX, test_wrist_cY = find_center(test_wrist_mask)
 
@@ -391,6 +388,13 @@ class MoveTest(MujocoGymAppHighFidelity):
         pcd1.points = o3d.utility.Vector3dVector(pcd1_np)
         pcd2.points = o3d.utility.Vector3dVector(pcd2_np)
 
+        # Give them colors for visualization
+        pcd1.paint_uniform_color([1, 0, 0])  # red
+        pcd2.paint_uniform_color([0, 1, 0])  # green
+
+        print("Before ICP:")
+        o3d.visualization.draw_geometries([pcd1, pcd2], window_name="Before ICP")
+
         # Apply ICP to align pcd2 to pcd1
         threshold = 0.05  # max correspondence distance
         reg = o3d.pipelines.registration.registration_icp(
@@ -408,6 +412,13 @@ class MoveTest(MujocoGymAppHighFidelity):
 
         print("Rotation:\n", R)
         print("Translation:\n", t)
+
+        # Apply transformation to pcd2
+        pcd2.transform(reg.transformation)
+
+        # Visualize after alignment
+        print("After ICP:")
+        o3d.visualization.draw_geometries([pcd1, pcd2], window_name="After ICP")
 
 
         # Tranformation Matrixes for estimate
@@ -431,14 +442,37 @@ class MoveTest(MujocoGymAppHighFidelity):
         )
 
         estimate_wrist = (T_EE_robot_frame @ ((T_EE_wrist_cam @ T_delta_wrist_cam) @ np.linalg.inv(T_EE_wrist_cam)))[:3, 3]
-        print("Estimate:", estimate)
+        print("Estimate:", estimate_wrist)
 
-        print("Avg Estimate: ",(estimate + estimate_wrist)/2)
+        avg_estimate = (estimate + estimate_wrist)/2
 
+        print("Avg Estimate: ", avg_estimate)
+
+        ############### END OF STAGE 2 #####################
+
+        ############### STAGE 3 ####################
+
+        m_star = bottle_neck_pos
+
+        depthr = self.mujoco_renderer.render("depth_array",camera_name="wrist_cam_right" )
+        pixelsr = self.mujoco_renderer.render("rgb_array",camera_name="wrist_cam_right")
+
+        segmented_mask, blue_mask = segment(pixelsr)
         
+        cX, cY = find_center(segmented_mask)
+        real_depthr = mujoco_depth_to_real(depthr)
+        Z = real_depthr[cY, cX]
+
+        m = [avg_estimate[0],avg_estimate[1],1]
+
+        Z_star = demo_wrist_distance
+
+        rho = Z / Z_star
+
+        print(rho * np.array(m) - np.array(m_star), rho - 1)
         
 
-        
+        ################## END OF STAGE 3 #######################
 
 
 
